@@ -73,3 +73,36 @@ function showReview(rows){
 btn('Text erneut auswerten',smart,()=>showReview(parseBeerScreenshot(rawBox.value)));
 btn('Datensatz manuell vorbereiten',smart,()=>showReview([{brewery:'',name:'',style:'',hops:'',abv:'',mhd:''}]));
 shot.onchange=async()=>{if(scanning||!shot.files[0])return;scanning=true;shot.disabled=true;review.replaceChildren();rawBox.value='';let worker;try{msg.textContent='Texterkennung wird geladen …';if(!window.Tesseract)await new Promise((resolve,reject)=>{const script=document.createElement('script');script.src='https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js';script.onload=resolve;script.onerror=()=>{script.remove();reject(Error('Texterkennung konnte nicht geladen werden'));};document.head.append(script);});worker=await Tesseract.createWorker('deu+eng',1,{logger:m=>{if(m.status==='recognizing text')msg.textContent=`Texterkennung: ${Math.round(m.progress*100)} %`;}});const r=await worker.recognize(shot.files[0]);rawBox.value=r.data.text;showReview(parseBeerScreenshot(rawBox.value));msg.textContent='Texterkennung abgeschlossen. Bitte Angaben prüfen.';}catch(e){msg.textContent='Fehler: '+e.message+' – du kannst den Text auch manuell einfügen.';}finally{if(worker)try{await worker.terminate()}catch{}scanning=false;shot.disabled=false;}};
+
+// Hop Library: personal preferences, separate from consumption and freshness.
+const hopKey=s=>text(s).trim().replace(/\s+/g,' ').toLocaleLowerCase('de');
+function hopCatalog(data){
+ const map=new Map();
+ for(const b of [...data.stock,...data.archive])for(const raw of text(b.hops).split(/[,;\n]+/)){
+  const name=raw.trim();if(name&&!map.has(hopKey(name)))map.set(hopKey(name),name);
+ }
+ for(const h of Object.values(data.hopProfile||{}))if(h?.name)map.set(hopKey(h.name),h.name);
+ return [...map.values()].sort((a,b)=>a.localeCompare(b,'de'));
+}
+const hopPanel=el('section','',$('main'));hopPanel.hidden=true;
+$('main').insertBefore(hopPanel,$('search'));
+btn('Hop Library',$('add').parentElement,()=>{hopPanel.hidden=!hopPanel.hidden;if(!hopPanel.hidden){smart.hidden=true;drawHops();hopPanel.scrollIntoView({block:'nearest'});}});
+el('h2','Mein Hopfenprofil',hopPanel);
+el('p','Bewerte deine Vorlieben, nicht deinen Konsum. Unbewertete Hopfen bleiben neutral. Die Angaben werden später für SL1 verwendet.',hopPanel);
+const hopSearch=document.createElement('input');hopSearch.placeholder='Hopfen suchen';hopPanel.append(hopSearch);
+const hopFilter=document.createElement('select');for(const [v,t] of [['all','Alle'],['rated','Bewertet'],['new','Unbewertet']]){const o=el('option',t,hopFilter);o.value=v;}hopPanel.append(hopFilter);
+const hopAdd=document.createElement('input');hopAdd.placeholder='Neue Hopfensorte';hopPanel.append(hopAdd);
+const hopStatus=el('p','',hopPanel);hopStatus.setAttribute('role','status');
+const hopRows=el('div','',hopPanel);
+async function writeHop(name,rating){
+ if(busy)throw Error('Speicherung läuft');const n=structuredClone(state);n.hopProfile=n.hopProfile||{};const k=hopKey(name);if(!k||['__proto__','constructor','prototype'].includes(k))throw Error('Ungültiger Name');n.hopProfile[k]={name,rating};await save(n);drawHops();hopStatus.textContent='Hopfenprofil gespeichert.';
+}
+btn('Hopfen hinzufügen',hopPanel,async()=>{try{const name=hopAdd.value.trim();if(!name)return;if(hopCatalog(state).some(h=>hopKey(h)===hopKey(name)))throw Error('Hopfen bereits vorhanden');await writeHop(name,null);hopAdd.value='';}catch(e){hopStatus.textContent=e.message;}});
+function drawHops(){
+ const catalog=hopCatalog(state),profile=state.hopProfile||{},q=hopKey(hopSearch.value);hopRows.replaceChildren();
+ el('p',`${catalog.length} Bezeichnungen · ${catalog.filter(h=>Number.isInteger(profile[hopKey(h)]?.rating)).length} bewertet`,hopRows);
+ for(const name of catalog){const value=profile[hopKey(name)]?.rating??null;if(!hopKey(name).includes(q)||hopFilter.value==='rated'&&value===null||hopFilter.value==='new'&&value!==null)continue;
+ const row=el('label',name+' ',hopRows),select=document.createElement('select');for(const [v,t] of [['','Nicht bewertet'],['1','1 – Mag ich weniger'],['2','2 – Eher nicht'],['3','3 – Neutral'],['4','4 – Mag ich'],['5','5 – Lieblingshopfen']]){const o=el('option',t,select);o.value=v;}select.value=value===null?'':String(value);row.append(select);select.onchange=async()=>{select.disabled=true;try{await writeHop(name,select.value===''?null:Number(select.value));}catch(e){hopStatus.textContent='Fehler: '+e.message;drawHops();}finally{select.disabled=false;}};
+ }
+}
+hopSearch.oninput=drawHops;hopFilter.onchange=drawHops;
