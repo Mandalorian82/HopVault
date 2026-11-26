@@ -106,3 +106,23 @@ function drawHops(){
  }
 }
 hopSearch.oninput=drawHops;hopFilter.onchange=drawHops;
+
+// Read-only preference evidence; no changes to inventory or manual ratings.
+function hopEvidenceKey(s){const k=hopKey(s);return ({'azaca':'azacca','bru1':'bru-1','nelson':'nelson sauvin','idaho7':'idaho 7','id7':'idaho 7'})[k]||k;}
+function inferHopProfile(data){
+ const beers=new Map();
+ for(const b of [...data.stock,...data.archive]){const key=keyOf(b);if(!beers.has(key))beers.set(key,{hops:new Set(),sl:false,fav:false,again:false});const x=beers.get(key);for(const h of text(b.hops).split(/[,;\n]+/)){const k=hopEvidenceKey(h);if(k)x.hops.add(k);} }
+ for(const b of data.stock)if(b.sl==='SL1')beers.get(keyOf(b)).sl=true;
+ for(const b of data.archive){const x=beers.get(keyOf(b)),m=hopKey(b.mark);if(m==='favorit')x.fav=true;if(m==='nochmals')x.again=true;}
+ const stats=new Map();let total=0,positive=0;
+ for(const b of beers.values()){if(!b.hops.size)continue;total++;const signal=b.fav||b.again||b.sl;if(signal)positive++;for(const h of b.hops){if(!stats.has(h))stats.set(h,{name:h,n:0,yes:0,fav:0,again:0,sl:0});const s=stats.get(h);s.n++;s.yes+=Number(signal);s.fav+=Number(b.fav);s.again+=Number(b.again);s.sl+=Number(b.sl);}}
+ const base=total?positive/total:0;return [...stats.values()].map(s=>({...s,rate:(s.yes+5*base)/(s.n+5),base})).sort((a,b)=>b.rate-a.rate||b.n-a.n||a.name.localeCompare(b.name));
+}
+const dna=el('section','',hopPanel);hopPanel.insertBefore(dna,hopSearch);
+el('h2','My Hop DNA – automatisch',dna);
+el('p','Aus SL1, Favoriten und Nochmals abgeleitet. Jede Biersorte zählt einmal, unabhängig von Menge oder Anzahl Verkostungen. Fehlende Markierung bedeutet nicht, dass ein Bier schlecht ist.',dna);
+const dnaRows=el('div','',dna);
+const dnaAll=document.createElement('input');dnaAll.type='checkbox';const dnaLabel=el('label',' Alle Hinweise anzeigen',dna);dnaLabel.prepend(dnaAll);
+function drawDNA(){dnaRows.replaceChildren();const stats=inferHopProfile(state);const strong=stats.filter(s=>s.n>=3&&s.yes>=2&&s.rate>s.base);const rows=dnaAll.checked?stats:strong.slice(0,10);if(!rows.length)el('p','Noch keine ausreichend gestützten Hinweise.',dnaRows);for(const s of rows){const a=el('article','',dnaRows);el('strong',s.name,a);el('div',`${s.yes} von ${s.n} verschiedenen Bieren mit positivem Signal`,a);el('small',`SL1: ${s.sl} · Favorit: ${s.fav} · Nochmals: ${s.again}${s.n<3?' · Wenige Daten':''}`,a);}el('p','Hinweise auf Zusammenhänge, keine isolierten Hopfenbewertungen. Schreibvarianten werden nur für die Analyse zusammengeführt. Manuelle Bewertungen bleiben separat und freiwillig.',dnaRows);}
+dnaAll.onchange=drawDNA;
+const oldDrawHops=drawHops;drawHops=function(){oldDrawHops();drawDNA();};hopSearch.oninput=drawHops;hopFilter.onchange=drawHops;
