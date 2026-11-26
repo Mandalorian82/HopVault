@@ -5,7 +5,7 @@ const places=['Bestellt','Kühlschrank','Kühlschrank Garage','Weinkühlschrank'
 // Accept both current codes and legacy code 4 on import/migration.
 const placeFromCode=v=>({'1':'Kühlschrank','2':'Kühlschrank Garage','3':'Weinkühlschrank','4':'Kühlschrank','Bestellt':'Bestellt','Kühlschrank':'Kühlschrank','Kühlschrank Garage':'Kühlschrank Garage','Weinkühlschrank':'Weinkühlschrank'}[String(v).trim()]||'Ungeklärt');
 const exportPlace=b=>({'Kühlschrank':1,'Kühlschrank Garage':2,'Weinkühlschrank':3}[b.place]??(b.place==='Ungeklärt'?b.legacyPlace:b.place));
-const tabs=['Bestand','SL1','SL2','SL3','Frische','Bestellt','Archiv'];
+const tabs=['Bestand','SL1','SL2','SL3','Sonstige','Frische','Bestellt','1','2','3','Archiv'];
 const today=()=>new Date().toISOString().slice(0,10), id=()=>crypto.randomUUID();
 const text=v=>v==null?'':String(v), date=v=>v instanceof Date?v.toISOString().slice(0,10):typeof v==='number'?new Date(Date.UTC(1899,11,30)+v*86400000).toISOString().slice(0,10):text(v);
 const keyOf=b=>[b.brewery,b.name].map(s=>text(s).trim().toLowerCase()).join('|');
@@ -16,20 +16,29 @@ async function action(fn){try{await fn()}catch(e){status('Fehler: '+e.message)}}
 $('url').value=localStorage.getItem('hv_url')||'';$('key').value=localStorage.getItem('hv_key')||'';
 $('connect').onclick=()=>action(async()=>{db=supabase.createClient($('url').value.trim(),$('key').value.trim());const {data,error}=await db.auth.signInWithPassword({email:$('email').value,password:$('pw').value});if(error)throw error;user=data.user;localStorage.setItem('hv_url',$('url').value);localStorage.setItem('hv_key',$('key').value);const r=await db.from('hopvault_rows').select('data').eq('user_id',user.id).maybeSingle();if(r.error)throw r.error;state=r.data?.data||{stock:[],archive:[]};const migrated=structuredClone(state);let changed=false;for(const b of migrated.stock){if(b.place==='Ungeklärt'&&placeFromCode(b.legacyPlace)!=='Ungeklärt'){b.place=placeFromCode(b.legacyPlace);changed=true;}}if(changed)await save(migrated);$('login').hidden=true;$('main').hidden=false;$('pw').value='';render();status('Angemeldet')});
 $('logout').onclick=()=>action(async()=>{await db.auth.signOut();location.reload()});
-for(const t of tabs)btn(t,$('nav'),()=>{view=t;render()});$('search').oninput=render;
+for(const t of tabs){const e=btn(t,$('nav'),()=>{view=t;$('filterPlace').value='';render()});e.dataset.cat=t; if(['1','2','3'].includes(t))e.title=['','Kühlschrank','Kühlschrank Garage','Weinkühlschrank'][+t];}$('search').oninput=render;
+const defaultRules={wet:[4,8],nz:[4,10],ddh:[5,10],hazy:[6,12],aroma:[6,12],ipa:[8,14],west:[8,16]};
+const ruleNames={wet:'Wet Hop IPA',nz:'NZ / Galaxy / Nectaron / Superdelic',ddh:'DDH / TDH',hazy:'NEIPA / Hazy',aroma:'Citra / Mosaic / Strata',ipa:'IPA',west:'West Coast IPA'};
+const validDate=v=>/^\d{4}-\d{2}-\d{2}$/.test(v||'')&&Number.isFinite(Date.parse(v));
 function estimate(b){
- if(b.window && /^\d{4}-\d{2}-\d{2}$/.test(b.window))return {end:b.window,source:'manuell'};
- if(!/^\d{4}-\d{2}-\d{2}$/.test(b.ordered||'')||!Number.isFinite(Date.parse(b.ordered)))return null;
- const style=hopKey(b.style);if(!/ipa|pale ale|neipa|dipa|tipa|qipa|oat cream/.test(style))return null;
- let weeks=/wet hop/.test(style)?4:/ddh|tdh|hazy|neipa|oat cream/.test(style)?6:8;
- if(b.place==='Weinkühlschrank')weeks-=1;
- return {end:new Date(Date.parse(b.ordered)+weeks*7*86400000).toISOString().slice(0,10),source:'grobe Schätzung ab Bestellung'};
+ const manual=[b.planned,b.window].find(validDate);if(manual)return {end:manual,source:'Manuell'};
+ if(!validDate(b.ordered))return null;
+ const style=text(b.style).toLowerCase(), hops=text(b.hops).toLowerCase();
+ if(!/ipa|pale ale|neipa|dipa|tipa|qipa|oat cream/.test(style))return null;
+ const keys=[];if(/wet[ -]?hop/.test(style))keys.push('wet');if(/riwaka|nelson|peacharine|motueka|nectaron|galaxy|superdelic|rakau|wai[ -]?iti|kohatu|kohia|wakatu|pacific jade|pacifica|moutere/.test(hops)||/nz ipa|new zealand/.test(style))keys.push('nz');if(/ddh|tdh|dry hop/.test(style))keys.push('ddh');if(/hazy|neipa|new england|oat cream/.test(style))keys.push('hazy');if(/citra|mosaic|strata/.test(hops))keys.push('aroma');keys.push(/west coast|\bwc\b/.test(style)?'west':'ipa');
+ const rules={...defaultRules,...(state.freshnessRules||{})};const k=keys.sort((a,b)=>(rules[a][0]+rules[a][1])-(rules[b][0]+rules[b][1]))[0];const [lo,hi]=rules[k];
+ const base=Date.parse(b.ordered), day=86400000, start=new Date(base+lo*7*day).toISOString().slice(0,10), end=new Date(base+hi*7*day).toISOString().slice(0,10);let target=new Date(base+(lo+hi)*3.5*day).toISOString().slice(0,10);
+ // MHD is separate; if known, avoid suggesting a later month.
+ let m=text(b.mhd).trim(), cap='';if(validDate(m))cap=m;else{const match=m.match(/^(\d{1,2})[./-](\d{4})$/);if(match&&+match[1]>=1&&+match[1]<=12)cap=new Date(Date.UTC(+match[2],+match[1],0)).toISOString().slice(0,10);}
+ if(cap&&cap<target)target=cap;
+ return {end:target,source:ruleNames[k],start,rangeEnd:end};
 }
 function daysLeft(b){const e=estimate(b);return e?Math.round((Date.parse(e.end)-Date.parse(today()))/86400000):null;}
-function freshness(b){const e=estimate(b),d=daysLeft(b);if(!e)return 'Trinkfenster unbekannt';return (d<0?'Geschätztes Trinkfenster überschritten':d<=14?'Geschätztes Trinkfenster zeitnah':'Im geschätzten Trinkfenster')+' · '+e.end+' ('+e.source+')';}
+function monthLabel(v){return validDate(v)?new Intl.DateTimeFormat('de-CH',{month:'short',year:'numeric',timeZone:'UTC'}).format(new Date(v+'T00:00:00Z')):'';}
+function freshness(b){const e=estimate(b);return e?monthLabel(e.end)+' · '+e.source+(e.start?' · Richtwert ab Bestellung':''):'Kein Trinkmonat';}
 function displayHop(h){return text(h).split(/(\s+|-)/).map(w=>/^(hbc|cgj|cgx|t90|bbc|id7|cryo)$/i.test(w)&&!/^cryo$/i.test(w)?w.toUpperCase():w.charAt(0).toUpperCase()+w.slice(1)).join('');}
 const hopKeys=b=>[...new Set(text(b.hops).split(/[,;\n]+/).map(hopEvidenceKey).filter(Boolean))].sort((a,b)=>a.localeCompare(b,'de'));
-const sortDate=b=>b.planned||estimate(b)?.end||'';
+const sortDate=b=>estimate(b)?.end||'';
 const compareText=(a,b)=>text(a).localeCompare(text(b),'de',{numeric:true,sensitivity:'base'});
 const placeOrder=b=>({'Kühlschrank':1,'Kühlschrank Garage':2,'Weinkühlschrank':3,'Bestellt':4,'Ungeklärt':5}[b.place]||6);
 const allowedSort=['date','hop','place','brewery','name'];
@@ -37,36 +46,38 @@ const savedSort=localStorage.getItem('hv_sort');if(allowedSort.includes(savedSor
 $('sortBy').onchange=()=>{localStorage.setItem('hv_sort',$('sortBy').value);render()};
 $('filterHop').onchange=$('filterPlace').onchange=()=>render();
 $('resetFilters').onclick=()=>{$('filterHop').value='';$('filterPlace').value='';$('search').value='';render()};
+function rowsFor(tab){return tab==='Archiv'?state.archive:state.stock.filter(b=>{if(tab==='Bestellt')return b.place==='Bestellt';if(b.place==='Bestellt')return false;if(tab==='Bestand')return true;if(['1','2','3'].includes(tab))return placeOrder(b)===Number(tab);if(tab==='Sonstige')return !b.sl;if(tab==='Frische')return daysLeft(b)!==null&&daysLeft(b)<=14;return b.sl===tab;});}
+function countExemplars(rows){return rows.reduce((sum,b)=>{const n=Number(b.qty??1);return sum+(Number.isFinite(n)&&n>=0?n:0);},0);}
 function render(){
- for(const button of $('nav').querySelectorAll('button'))button.setAttribute('aria-pressed',String(button.textContent===view));
- const archive=view==='Archiv';$('filterPlace').disabled=archive;
+ for(const button of $('nav').querySelectorAll('button')){const tab=button.dataset.cat;button.textContent=`${tab} (${countExemplars(rowsFor(tab))})`;button.setAttribute('aria-pressed',String(tab===view));}
+ const archive=view==='Archiv';$('filterPlace').disabled=archive||view==='Bestellt'||['1','2','3'].includes(view);
  const options=[...new Set((archive?state.archive:state.stock).flatMap(hopKeys))].sort(compareText);
  const sel=$('filterHop'),previous=sel.value;sel.replaceChildren();const all=el('option','Alle',sel);all.value='';for(const k of options){const o=el('option',displayHop(k),sel);o.value=k;}sel.value=options.includes(previous)?previous:'';
- let rows=archive?state.archive:state.stock.filter(b=>view==='Bestand'||view==='Bestellt'&&b.place==='Bestellt'||view==='Frische'&&b.place!=='Bestellt'&&((daysLeft(b)!==null&&daysLeft(b)<=14)||(b.planned&&b.planned<=today()))||b.sl===view&&b.place!=='Bestellt');
+ let rows=rowsFor(view);
  const q=$('search').value.toLowerCase(),hop=sel.value,place=$('filterPlace').value,sort=$('sortBy').value;
  rows=rows.filter(b=>[b.name,b.brewery,b.style,b.hops].join(' ').toLowerCase().includes(q)&&(!hop||hopKeys(b).includes(hop))&&(archive||!place||b.place===place));
  rows.sort((a,b)=>{let c=0;if(sort==='date')c=compareText((archive?a.archived:sortDate(a))||'9999-99-99',(archive?b.archived:sortDate(b))||'9999-99-99');else if(sort==='hop')c=compareText(hopKeys(a).join(', ')||'\uffff',hopKeys(b).join(', ')||'\uffff');else if(sort==='place')c=placeOrder(a)-placeOrder(b);else if(sort==='brewery')c=compareText(a.brewery,b.brewery);return c||compareText(a.name,b.name);});
- $('summary').textContent=`${view}: ${new Set(rows.map(keyOf)).size} Sorten · ${rows.reduce((s,b)=>s+(Number(b.qty)||1),0)} ${archive?'Archiveinträge':'Exemplare'}`;
+ $('summary').textContent=`${view}: ${new Set(rows.map(keyOf)).size} Sorten · ${countExemplars(rows)} ${archive?'Archiveinträge':'Exemplare'}`;
  const p=$('list');p.replaceChildren();if(!rows.length){el('p','Keine passenden Biere.',p);return;}
- for(const b of rows){const a=el('article','',p),toggle=btn('',a,()=>{detail.hidden=!detail.hidden;toggle.setAttribute('aria-expanded',String(!detail.hidden));});toggle.className='beer-toggle';toggle.setAttribute('aria-expanded','false');
- const head=el('span','',toggle);head.className='beer-head';const title=el('strong',(b.sl==='SL1'&&!archive&&daysLeft(b)!==null&&daysLeft(b)<=14?'★ ':'')+b.name,head);title.style.fontSize='17px';
+ for(const b of rows){const a=el('article','',p);a.dataset.cat=archive?'Archiv':b.place==='Bestellt'?'Bestellt':b.sl||'Sonstige';const toggle=btn('',a,()=>{detail.hidden=!detail.hidden;toggle.setAttribute('aria-expanded',String(!detail.hidden));});toggle.className='beer-toggle';toggle.setAttribute('aria-expanded','false');
+ const head=el('span','',toggle);head.className='beer-head';const title=el('strong',(b.sl==='SL1'&&!archive&&b.place!=='Bestellt'&&daysLeft(b)!==null&&daysLeft(b)<=14?'★ ':'')+b.name,head);title.style.fontSize='17px';
  const meta=el('span',`${b.brewery} · ${b.style} · ${b.abv==null?'?':b.abv} %`,toggle);meta.className='beer-meta';meta.style.display='block';
  const hops=el('span',text(b.hops).split(/[,;\n]+/).map(h=>displayHop(h.trim())).join(' · '),toggle);hops.className='beer-hops';hops.style.display='block';
- const loc=el('span',archive?`${b.mark||''} · ${b.archived||''}`:`${b.place||'Ungeklärt'}${b.place==='Ungeklärt'?' (Excel: '+(b.legacyPlace||'leer')+')':''}${sortDate(b)?' · '+sortDate(b).split('-').reverse().join('.')+(b.planned?' (Planung)':' (geschätzt)'):''}`,toggle);loc.className='beer-date';loc.style.display='block';
- const right=el('div','',a);right.className='beer-right';const qty=el('div',`${b.qty||1}×`,right);qty.className='beer-qty';if(!archive&&b.sl){const tag=el('span',b.sl,right);tag.className='sl-tag sl-'+b.sl;}
- const detail=el('div','',a);detail.className='beer-detail-wrap';detail.hidden=true;if(!archive){el('div',freshness(b),detail);if(b.planned)el('small','Bisherige Planung: '+b.planned,detail);if(b.ordered)el('div','Bestellt: '+b.ordered,detail);if(b.mhd)el('div','MHD: '+b.mhd,detail);}
- btn('Bearbeiten',detail,()=>edit(b,archive));if(!archive&&b.place!=='Bestellt')btn('1 ausbuchen',detail,()=>action(async()=>{if(!confirm('Ein Exemplar ausbuchen und archivieren?'))return;const n=structuredClone(state),x=n.stock.find(x=>x.id===b.id);n.archive.push({...x,id:id(),qty:1,archived:today()});if(--x.qty===0)n.stock=n.stock.filter(y=>y.id!==b.id);if(x.sl==='SL2'&&!n.stock.some(y=>keyOf(y)===keyOf(x)&&y.qty>=2&&y.place!=='Bestellt'))for(const y of n.stock.filter(y=>keyOf(y)===keyOf(x)))y.sl='';await save(n)}));
+ const loc=el('span',archive?[b.mark,b.archived].filter(Boolean).join(' · '):[b.place==='Bestellt'?'Bestellt':b.place==='Ungeklärt'?'Ort offen':String(placeOrder(b)),monthLabel(sortDate(b))].filter(Boolean).join(' · '),toggle);loc.className='beer-date';loc.style.display='block';
+ const right=el('div','',a);right.className='beer-right';const qty=el('div',`${b.qty||1}×`,right);qty.className='beer-qty';if(!archive&&b.place!=='Bestellt'&&b.sl){const tag=el('span',b.sl,right);tag.className='sl-tag sl-'+b.sl;}
+ const detail=el('div','',a);detail.className='beer-detail-wrap';detail.hidden=true;if(!archive){el('div',freshness(b),detail);if(b.ordered)el('div','Bestellt: '+b.ordered,detail);if(b.mhd)el('div','MHD: '+b.mhd,detail);}
+ btn('Bearbeiten',detail,()=>edit(b,archive));if(!archive){const move=el('select','',detail);const empty=el('option',b.place==='Bestellt'?'Einlagern …':'Umlagern …',move);empty.value='';for(const p of places.slice(1,4)){if(p===b.place)continue;const o=el('option',p,move);o.value=p;}move.onchange=()=>action(async()=>{if(!move.value)return;const n=structuredClone(state),x=n.stock.find(x=>x.id===b.id);if(!x)throw Error('Eintrag fehlt');x.place=move.value;x.legacyPlace=String(placeOrder(x));await save(n);});}if(!archive&&b.place!=='Bestellt')btn('1 ausbuchen',detail,()=>action(async()=>{if(!confirm('Ein Exemplar ausbuchen und archivieren?'))return;const n=structuredClone(state),x=n.stock.find(x=>x.id===b.id);n.archive.push({...x,id:id(),qty:1,archived:today()});if(--x.qty===0)n.stock=n.stock.filter(y=>y.id!==b.id);if(x.sl==='SL2'&&!n.stock.some(y=>keyOf(y)===keyOf(x)&&y.qty>=2&&y.place!=='Bestellt'))for(const y of n.stock.filter(y=>keyOf(y)===keyOf(x)))y.sl='';await save(n)}));
  }
 }
 
-const fields=[['brewery','Brauerei'],['name','Bier'],['style','Stil (eigene Schreibweise)'],['hops','Hopfen'],['abv','Alkohol %','number'],['qty','Menge','number'],['place','Lagerort',places],['sl','Shortlist',['','SL1','SL2','SL3']],['ordered','Bestelldatum','date'],['planned','Bisherige Trinkplanung','date'],['window','Geschätztes Trinkfenster bis','date'],['mhd','MHD (Text)'],['mark','Markierung (Favorit / Nochmals)'],['archived','Archivdatum','date']];
+const fields=[['brewery','Brauerei'],['name','Bier'],['style','Stil (eigene Schreibweise)'],['hops','Hopfen'],['abv','Alkohol %','number'],['qty','Menge','number'],['place','Lagerort',places],['sl','Shortlist',['','SL1','SL2','SL3']],['ordered','Bestelldatum','date'],['planned','Trinkdatum (manuell)','date'],['window','Frühere manuelle Planung','date'],['mhd','MHD (Text)'],['mark','Markierung (Favorit / Nochmals)'],['archived','Archivdatum','date']];
 function edit(b={},archive=false){const form=$('form');form.replaceChildren();$('editor').hidden=false;for(const [k,label,type] of fields){const l=el('label',label,form);let e;if(Array.isArray(type)){e=document.createElement('select');for(const v of type){const o=el('option',v||'Keine',e);o.value=v}}else{e=document.createElement('input');e.type=type||'text';if(k==='abv')e.step='0.1';if(k==='qty')e.min='1';}e.name=k;e.value=b[k]??(k==='qty'?1:k==='place'?'Bestellt':'');if(['brewery','name','qty'].includes(k))e.required=true;l.append(e)}btn('Abbrechen',form,()=>$('editor').hidden=true);const submit=el('button','Speichern',form);submit.type='submit';form.onsubmit=e=>{e.preventDefault();action(async()=>{const d=Object.fromEntries(new FormData(form));d.qty=Number(d.qty);d.abv=d.abv===''?null:Number(d.abv);if(!Number.isInteger(d.qty)||d.qty<1)throw Error('Ungültige Menge');const n=structuredClone(state),arr=archive?n.archive:n.stock;const x={...b,...d,id:b.id||id()};if(!archive){const same=arr.filter(y=>y.id!==x.id&&keyOf(y)===keyOf(x));for(const y of same)y.sl=x.sl;if(x.sl==='SL2'&&x.qty<2)throw Error('SL2 benötigt ein Paar am selben Ort');}const i=arr.findIndex(y=>y.id===x.id);if(i<0)arr.push(x);else arr[i]=x;await save(n);$('editor').hidden=true})};$('editor').scrollIntoView()}
 $('add').onclick=()=>edit();
 function val(c){const v=c.value;return v&&typeof v==='object'&&!(v instanceof Date)?v.result??v.text??(v.richText||[]).map(x=>x.text).join(''):v}
 $('file').onchange=()=>action(async()=>{if(state.stock.length||state.archive.length)throw Error('Import nur in leere Datenbank, um Duplikate zu vermeiden');const f=$('file').files[0];if(!f)return;const w=new ExcelJS.Workbook();await w.xlsx.load(await f.arrayBuffer());const s=w.getWorksheet('IPA Sammlung'),a=w.getWorksheet('Getrunken');if(!s||!a)throw Error('Tabellenblätter fehlen');const n={stock:[],archive:[]};s.eachRow((r,i)=>{if(i===1||!val(r.getCell(3)))return;const v=j=>val(r.getCell(j)),tr=v(9),loc=text(v(7));n.stock.push({id:id(),number:v(1),brewery:text(v(2)),name:text(v(3)),style:text(v(4)),hops:text(v(5)),abv:v(6)==null?null:Math.round(Number(v(6))*1000)/10,legacyPlace:loc,place:placeFromCode(loc),ordered:date(v(8)),sl:/^SL[123]$/.test(text(tr))?text(tr):'',planned:/^SL[123]$/.test(text(tr))?'':date(tr),window:'',qty:Number(v(10))||1})});a.eachRow((r,i)=>{if(i===1||!val(r.getCell(2)))return;const v=j=>val(r.getCell(j));n.archive.push({id:id(),brewery:text(v(1)),name:text(v(2)),style:text(v(3)),hops:text(v(4)),abv:v(5)==null?null:Math.round(Number(v(5))*1000)/10,legacyF:v(6),ordered:date(v(7)),mark:text(v(8)),qty:1})});if(!confirm(`${n.stock.length} Bestandszeilen und ${n.archive.length} Archiveinträge importieren? Lagercodes 1, 2, 3 sowie der alte Code 4 werden automatisch zugeordnet.`))return;await save(n)});
 function download(blob,name){const u=URL.createObjectURL(blob),a=document.createElement('a');a.href=u;a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(u),1000)}
 $('backup').onclick=()=>download(new Blob([JSON.stringify(state,null,2)],{type:'application/json'}),'HopVault-backup.json');
-$('export').onclick=()=>action(async()=>{const w=new ExcelJS.Workbook(),s=w.addWorksheet('IPA Sammlung'),a=w.addWorksheet('Getrunken');s.addRow([state.stock.reduce((t,b)=>t+b.qty,0),'Brauerei','Bier','Stil','Hopfen','Alk.','Ort','Bestellung','Trinken','Menge']);const dt=v=>v?new Date(v+'T00:00:00Z'):null;state.stock.forEach((b,i)=>s.addRow([i+1,b.brewery,b.name,b.style,b.hops,b.abv==null?null:b.abv/100,exportPlace(b),dt(b.ordered),b.sl||dt(b.planned||b.window),b.qty]));a.addRow(['Getrunken']);state.archive.forEach(b=>a.addRow([b.brewery,b.name,b.style,b.hops,b.abv==null?null:b.abv/100,b.legacyF??null,dt(b.ordered),b.mark]));s.getColumn(6).numFmt='0.0%';a.getColumn(5).numFmt='0.0%';s.getColumn(8).numFmt='dd.mm.yyyy';s.getColumn(9).numFmt='dd.mm.yyyy';a.getColumn(7).numFmt='dd.mm.yyyy';for(const sheet of [s,a])sheet.columns.forEach(c=>c.width=22);download(new Blob([await w.xlsx.writeBuffer()],{type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'}),'HopVault.xlsx')});
+$('export').onclick=()=>action(async()=>{const w=new ExcelJS.Workbook(),s=w.addWorksheet('IPA Sammlung'),a=w.addWorksheet('Getrunken');s.addRow([state.stock.reduce((t,b)=>t+b.qty,0),'Brauerei','Bier','Stil','Hopfen','Alk.','Ort','Bestellung','Trinken','Menge']);const dt=v=>v?new Date(v+'T00:00:00Z'):null;state.stock.forEach((b,i)=>s.addRow([i+1,b.brewery,b.name,b.style,b.hops,b.abv==null?null:b.abv/100,exportPlace(b),dt(b.ordered),b.sl||dt(sortDate(b)),b.qty]));a.addRow(['Getrunken']);state.archive.forEach(b=>a.addRow([b.brewery,b.name,b.style,b.hops,b.abv==null?null:b.abv/100,b.legacyF??null,dt(b.ordered),b.mark]));s.getColumn(6).numFmt='0.0%';a.getColumn(5).numFmt='0.0%';s.getColumn(8).numFmt='dd.mm.yyyy';s.getColumn(9).numFmt='dd.mm.yyyy';a.getColumn(7).numFmt='dd.mm.yyyy';for(const sheet of [s,a])sheet.columns.forEach(c=>c.width=22);download(new Blob([await w.xlsx.writeBuffer()],{type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'}),'HopVault.xlsx')});
 
 // Smart Import: browser OCR and editable preview, no paid API.
 function parseBeerScreenshot(raw){
@@ -128,7 +139,7 @@ const hopPanel=el('section','',$('main'));hopPanel.hidden=true;
 $('main').insertBefore(hopPanel,$('search'));
 btn('Hop Library',$('add').parentElement,()=>{hopPanel.hidden=!hopPanel.hidden;if(!hopPanel.hidden){smart.hidden=true;drawHops();hopPanel.scrollIntoView({block:'nearest'});}});
 el('h2','Mein Hopfenprofil',hopPanel);
-el('p','Manuelle Bewertungen sind freiwillig. My Hop DNA liefert Hinweise auf deine Vorlieben.',hopPanel);
+
 const hopSearch=document.createElement('input');hopSearch.placeholder='Hopfen suchen';hopPanel.append(hopSearch);
 const hopFilter=document.createElement('select');for(const [v,t] of [['all','Alle'],['rated','Bewertet'],['new','Unbewertet']]){const o=el('option',t,hopFilter);o.value=v;}hopPanel.append(hopFilter);
 const hopAdd=document.createElement('input');hopAdd.placeholder='Neue Hopfensorte';hopPanel.append(hopAdd);
@@ -160,17 +171,17 @@ function inferHopProfile(data){
 }
 const dna=el('section','',hopPanel);hopPanel.insertBefore(dna,hopSearch);
 el('h2','My Hop DNA – automatisch',dna);
-el('p','Aus SL1, Favoriten und Nochmals abgeleitet. Jede Biersorte zählt einmal, unabhängig von Menge oder Anzahl Verkostungen. Fehlende Markierung bedeutet nicht, dass ein Bier schlecht ist.',dna);
+
 const dnaRows=el('div','',dna);
 const dnaAll=document.createElement('input');dnaAll.type='checkbox';const dnaLabel=el('label',' Alle Hinweise anzeigen',dna);dnaLabel.prepend(dnaAll);
-function drawDNA(){dnaRows.replaceChildren();const stats=inferHopProfile(state);const strong=stats.filter(s=>s.n>=3&&s.yes>=2&&s.rate>s.base);const rows=dnaAll.checked?stats:strong.slice(0,10);if(!rows.length)el('p','Noch keine ausreichend gestützten Hinweise.',dnaRows);for(const s of rows){const a=el('article','',dnaRows);el('strong',displayHop(s.name),a);el('div',`${s.yes} von ${s.n} verschiedenen Bieren mit positivem Signal`,a);el('small',`SL1: ${s.sl} · Favorit: ${s.fav} · Nochmals: ${s.again}${s.n<3?' · Wenige Daten':''}`,a);}el('p','Hinweise auf Zusammenhänge, keine isolierten Hopfenbewertungen. Schreibvarianten werden nur für die Analyse zusammengeführt. Manuelle Bewertungen bleiben separat und freiwillig.',dnaRows);}
+function drawDNA(){dnaRows.replaceChildren();const stats=inferHopProfile(state);const strong=stats.filter(s=>s.n>=3&&s.yes>=2&&s.rate>s.base);const rows=dnaAll.checked?stats:strong.slice(0,10);if(!rows.length)el('p','Noch keine ausreichend gestützten Hinweise.',dnaRows);for(const s of rows){const a=el('article','',dnaRows);el('strong',displayHop(s.name),a);el('div',`${s.yes} von ${s.n} verschiedenen Bieren mit positivem Signal`,a);el('small',`SL1: ${s.sl} · Favorit: ${s.fav} · Nochmals: ${s.again}${s.n<3?' · Wenige Daten':''}`,a);}}
 dnaAll.onchange=drawDNA;
 const oldDrawHops=drawHops;drawHops=function(){oldDrawHops();drawDNA();};hopSearch.oninput=drawHops;hopFilter.onchange=drawHops;
 
 // Situation-based suggestions, never automatic assignments or consumption targets.
 const ready=el('section','',$('main'));ready.hidden=true;$('main').insertBefore(ready,$('search'));
 el('h2','Auswahl & Lagerung',ready);
-el('p','Vorschläge aus deinem vorhandenen Bestand. SL1 bleibt geschützt. Trinkfenster sind grobe Aroma-Schätzungen ab Bestellung, keine Haltbarkeits- oder Konsumvorgaben. Hopfenprofil beeinflusst die Auswahl, nicht eine ungesicherte Haltbarkeitsformel.',ready);
+
 const situation=document.createElement('select');for(const [v,t] of [['SL1','SL1'],['SL2','SL2'],['SL3','SL3'],['Frische','Frischeübersicht – unabhängig von SL']]){const o=el('option',t,situation);o.value=v;}ready.append(situation);
 const readyRows=el('div','',ready);
 btn('Auswahl & Lagerung',$('add').parentElement,()=>{ready.hidden=!ready.hidden;if(!ready.hidden){hopPanel.hidden=true;smart.hidden=true;drawReady();ready.scrollIntoView({block:'nearest'});}});
@@ -187,9 +198,9 @@ function drawReady(){
  const score=sl==='SL1'?(match??0)*4+freshScore:sl==='SL2'?(match===null?1:1-Math.abs(match))+freshScore:sl==='SL3'?freshScore+(qty===1?0.3:0)+(b.place==='Kühlschrank'?0.2:0)+(match??0):freshScore+(match??0);
  candidates.push({all,b,assigned,qty,pair,days,match,score,byPlace});}
  candidates.sort((a,b)=>Number(b.assigned===sl)-Number(a.assigned===sl)||b.score-a.score||a.b.name.localeCompare(b.b.name));
- el('p',sl==='Frische'?'Alle passenden Hinweise, unabhängig von Shortlists.':`${existing} bereits zugeordnet · Richtwert ca. 10 Sorten. Vorschläge nur für noch nicht zugeordnete Biere.`,readyRows);
+ if(sl!=='Frische')el('small',`${existing} zugeordnet`,readyRows);
  const limit=sl==='Frische'?Infinity:Math.max(0,10-existing);let proposed=0;
- for(const c of candidates){if(sl!=='Frische'&&c.assigned!==sl&&proposed++>=limit)continue;const {b,assigned,qty,days,match,byPlace}=c;const a=el('article','',readyRows);el('h2',((assigned==='SL1'||sl==='SL1')&&days!==null&&days<=14?'★ ':'')+b.name,a);el('div',`${b.brewery} · ${b.style} · ${qty}× · ${assigned||'Keine SL'}`,a);el('div',Object.entries(byPlace).map(([p,q])=>`${p}: ${q}×`).join(' · '),a);el('small',freshness(b),a);el('p',match===null?'Hopfenprofil: noch keine belastbaren Hinweise':match>0.12?'Hopfenprofil: positive Hinweise':'Hopfenprofil: keine klare positive Übereinstimmung',a);
+ for(const c of candidates){if(sl!=='Frische'&&c.assigned!==sl&&proposed++>=limit)continue;const {b,assigned,qty,days,match,byPlace}=c;const a=el('article','',readyRows);el('h2',((assigned==='SL1'||sl==='SL1')&&days!==null&&days<=14?'★ ':'')+b.name,a);el('div',`${b.brewery} · ${b.style} · ${qty}× · ${assigned||'Keine SL'}`,a);el('div',Object.entries(byPlace).map(([p,q])=>`${p}: ${q}×`).join(' · '),a);el('small',freshness(b),a);
  const target=preferredPlace(b,sl==='Frische'?assigned:sl);el('div','Lagerungsvorschlag: '+target,a);
  if(sl!=='Frische'&&!assigned)btn('Vorschlag '+sl+' übernehmen',a,()=>action(async()=>{const n=structuredClone(state);for(const x of n.stock.filter(x=>keyOf(x)===keyOf(b)))x.sl=sl;await save(n);drawReady();}));
  btn('Bearbeiten / Lagerort ändern',a,()=>edit(b));
@@ -198,3 +209,7 @@ function drawReady(){
 }
 situation.onchange=drawReady;
 const renderBase=render;render=function(){renderBase();if(!ready.hidden)drawReady();};
+
+const rulesPanel=el('section','',$('main'));rulesPanel.hidden=true;$('main').insertBefore(rulesPanel,$('search'));
+btn('Trinkfenster-Regeln',$('add').parentElement,()=>{rulesPanel.hidden=!rulesPanel.hidden;if(!rulesPanel.hidden)drawRules();});
+function drawRules(){rulesPanel.replaceChildren();el('h2','Trinkfenster · Wochen ab Bestellung',rulesPanel);el('small','Persönliche Richtwerte, keine Haltbarkeitsfristen. Manuelle Daten haben Vorrang.',rulesPanel);const inputs={};for(const k of Object.keys(defaultRules)){const row=el('div','',rulesPanel);row.className='row';el('span',ruleNames[k],row);inputs[k]=[];for(const v of (state.freshnessRules?.[k]||defaultRules[k])){const i=document.createElement('input');i.type='number';i.min=0;i.max=104;i.step=1;i.value=v;i.style.width='75px';i.setAttribute('aria-label',ruleNames[k]+(inputs[k].length?' bis':' ab'));row.append(i);inputs[k].push(i);}}btn('Speichern',rulesPanel,()=>action(async()=>{const n=structuredClone(state);n.freshnessRules={};for(const [k,p] of Object.entries(inputs)){const v=p.map(x=>Number(x.value));if(p.some(x=>!x.value.trim())||!v.every(x=>Number.isInteger(x)&&x>=0&&x<=104)||v[0]>v[1])throw Error('Wochen prüfen');n.freshnessRules[k]=v;}await save(n);rulesPanel.hidden=true;}));btn('Standardwerte',rulesPanel,()=>action(async()=>{const n=structuredClone(state);delete n.freshnessRules;await save(n);drawRules();}));}
