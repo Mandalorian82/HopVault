@@ -5,7 +5,7 @@ const places=['Bestellt','Kühlschrank Garage','Kühlschrank','Weinkühlschrank'
 // Accept both current codes and legacy code 4 on import/migration.
 const placeFromCode=v=>({'1':'Kühlschrank Garage','2':'Kühlschrank','3':'Weinkühlschrank','4':'Kühlschrank Garage','Bestellt':'Bestellt','Kühlschrank':'Kühlschrank','Kühlschrank Garage':'Kühlschrank Garage','Weinkühlschrank':'Weinkühlschrank'}[String(v).trim()]||'Ungeklärt');
 const exportPlace=b=>({'Kühlschrank':2,'Kühlschrank Garage':1,'Weinkühlschrank':3}[b.place]??(b.place==='Ungeklärt'?b.legacyPlace:b.place));
-const tabs=['Bestand','SL1','SL2','SL3','Sonstige','Bestellt','Archiv'];
+const tabs=['SL1','SL2','SL3','Bestand','Jetzt trinken'];
 const today=()=>new Date().toISOString().slice(0,10), id=()=>crypto.randomUUID();
 const text=v=>v==null?'':String(v), date=v=>v instanceof Date?v.toISOString().slice(0,10):typeof v==='number'?new Date(Date.UTC(1899,11,30)+v*86400000).toISOString().slice(0,10):text(v);
 const keyOf=b=>[b.brewery,b.name].map(s=>text(s).trim().toLowerCase()).join('|');
@@ -14,11 +14,16 @@ function btn(t,p,fn){const e=el('button',t,p);e.type='button';e.onclick=fn;retur
 async function save(next){if(busy)throw Error('Speicherung läuft');busy=true;try{const {error}=await db.from('hopvault_rows').upsert({user_id:user.id,data:next,updated_at:new Date().toISOString()});if(error)throw error;state=next;render();status('Gespeichert');}finally{busy=false}}
 async function action(fn){try{await fn()}catch(e){status('Fehler: '+e.message)}}
 $('url').value=localStorage.getItem('hv_url')||'';$('key').value=localStorage.getItem('hv_key')||'';
-async function loadSession(u){user=u;const r=await db.from('hopvault_rows').select('data').eq('user_id',user.id).maybeSingle();if(r.error)throw r.error;state=r.data?.data||{stock:[],archive:[]};const n=structuredClone(state);if(n.storageVersion!==2){for(const b of n.stock){if(b.place==='Bestellt')continue;if(b.place==='Kühlschrank'||b.place==='Ungeklärt'&&String(b.legacyPlace)==='4')b.place='Kühlschrank Garage';else if(b.place==='Ungeklärt'&&String(b.legacyPlace)==='3')b.place='Weinkühlschrank';else if(b.place==='Kühlschrank Garage')b.place='Kühlschrank';if(placeOrder(b)<=3)b.legacyPlace=String(placeOrder(b));}n.storageVersion=2;if(r.data)await save(n);else state=n;} $('login').hidden=true;$('main').hidden=false;$('pw').value='';render();status('Angemeldet');}
+async function loadSession(u){user=u;const r=await db.from('hopvault_rows').select('data').eq('user_id',user.id).maybeSingle();if(r.error)throw r.error;state=r.data?.data||{stock:[],archive:[]};const n=structuredClone(state);if(n.storageVersion!==2){for(const b of n.stock){if(b.place==='Bestellt')continue;if(b.place==='Kühlschrank'||b.place==='Ungeklärt'&&String(b.legacyPlace)==='4')b.place='Kühlschrank Garage';else if(b.place==='Ungeklärt'&&String(b.legacyPlace)==='3')b.place='Weinkühlschrank';else if(b.place==='Kühlschrank Garage')b.place='Kühlschrank';if(placeOrder(b)<=3)b.legacyPlace=String(placeOrder(b));}n.storageVersion=2;if(r.data)await save(n);else state=n;} $('login').hidden=true;$('main').hidden=false;$('topActions').hidden=false;$('pw').value='';render();status('Angemeldet');}
 function client(){return supabase.createClient($('url').value.trim(),$('key').value.trim(),{auth:{persistSession:true,autoRefreshToken:true}});}
 $('connect').onclick=()=>action(async()=>{db=client();const {data,error}=await db.auth.signInWithPassword({email:$('email').value.trim(),password:$('pw').value});if(error)throw error;localStorage.setItem('hv_url',$('url').value.trim());localStorage.setItem('hv_key',$('key').value.trim());await loadSession(data.user);});
 $('logout').onclick=()=>action(async()=>{await db.auth.signOut();location.reload()});
-for(const t of tabs){const e=btn(t,$('nav'),()=>{view=t;for(const panel of [ready,hopPanel,smart,rulesPanel,$('editor')])panel.hidden=true;$('filterPlace').value='';$('filterHop').value='';$('search').value='';$('sortBy').value='default';render();window.scrollTo(0,0)});e.dataset.cat=t; if(['1','2','3'].includes(t))e.title=['','Kühlschrank','Kühlschrank Garage','Weinkühlschrank'][+t];}$('search').oninput=render;
+function switchView(t){view=t;for(const panel of [ready,hopPanel,smart,rulesPanel,$('editor')])panel.hidden=true;$('tools').hidden=true;$('menuToggle').setAttribute('aria-expanded','false');render();window.scrollTo(0,0);}
+for(const t of tabs){const e=btn(t,$('nav'),()=>switchView(t));e.dataset.cat=t;}
+const filterToggle=btn('Filter',$('nav'),()=>{const open=$('filters').hidden;$('filters').hidden=!open;$('search').hidden=!open;filterToggle.setAttribute('aria-expanded',String(open));});filterToggle.id='filterToggle';filterToggle.setAttribute('aria-expanded','false');
+$('menuToggle').onclick=()=>{const open=$('tools').hidden;$('tools').hidden=!open;$('menuToggle').setAttribute('aria-expanded',String(open));};
+for(const t of ['Bestellt','Archiv','Sonstige'])btn(t,$('tools'),()=>switchView(t));
+$('search').oninput=render;
 const defaultRules={wet:[4,8],nz:[4,10],ddh:[5,10],hazy:[6,12],aroma:[6,12],ipa:[8,14],west:[8,16]};
 const ruleNames={wet:'Wet Hop IPA',nz:'NZ / Galaxy / Nectaron / Superdelic',ddh:'DDH / TDH',hazy:'NEIPA / Hazy',aroma:'Citra / Mosaic / Strata',ipa:'IPA',west:'West Coast IPA'};
 const validDate=v=>/^\d{4}-\d{2}-\d{2}$/.test(v||'')&&Number.isFinite(Date.parse(v));
@@ -46,28 +51,41 @@ const placeOrder=b=>({'Kühlschrank':2,'Kühlschrank Garage':1,'Weinkühlschrank
 const allowedSort=['default','date','hop','place','brewery','name'];
 const savedSort=localStorage.getItem('hv_sort');$('sortBy').value='default';
 $('sortBy').onchange=()=>{localStorage.setItem('hv_sort',$('sortBy').value);render()};
-$('filterHop').onchange=$('filterPlace').onchange=()=>render();
-$('resetFilters').onclick=()=>{$('filterHop').value='';$('filterPlace').value='';$('search').value='';render()};
-function rowsFor(tab){return tab==='Archiv'?state.archive:state.stock.filter(b=>{if(tab==='Bestellt')return b.place==='Bestellt';if(b.place==='Bestellt')return false;if(tab==='Bestand')return true;if(['1','2','3'].includes(tab))return placeOrder(b)===Number(tab);if(tab==='Sonstige')return !b.sl;if(tab==='Frische')return daysLeft(b)!==null&&daysLeft(b)<=14;return b.sl===tab;});}
+$('filterHop').onchange=$('filterPlace').onchange=$('filterBrew').onchange=$('filterMonth').onchange=()=>render();$('recommend').onclick=()=>{switchView('Jetzt trinken');$('filters').hidden=$('search').hidden=true;filterToggle.setAttribute('aria-expanded','false');};
+$('resetFilters').onclick=()=>{$('filterHop').value='';$('filterPlace').value='';$('search').value='';$('filterBrew').value='';$('filterMonth').value='';$('sortBy').value='default';render()};
+const monthKey=b=>sortDate(b).slice(0,7);
+const due=b=>!!monthKey(b)&&monthKey(b)<=today().slice(0,7);
+function rowsFor(tab){return tab==='Archiv'?state.archive:state.stock.filter(b=>{if(tab==='Bestand')return true;if(tab==='Bestellt')return b.place==='Bestellt';if(b.place==='Bestellt')return false;if(tab==='Jetzt trinken')return due(b);if(tab==='Sonstige')return !b.sl;return b.sl===tab;});}
+function fillSelect(id,values,label){const s=$(id),prev=s.value;s.replaceChildren();el('option','Alle',s).value='';for(const v of values)el('option',label(v),s).value=v;s.value=values.includes(prev)?prev:'';}
+function reminder(b,right){const now=due(b),soon=daysLeft(b)!==null&&daysLeft(b)<=28;if(['SL1','SL3'].includes(b.sl)){if(!now&&!soon)return;const wrap=el('span','',right);wrap.className='hop-indicator';wrap.title=now?'Trinkfenster erreicht':'Trinkfenster nähert sich';wrap.setAttribute('role','img');wrap.setAttribute('aria-label',wrap.title);wrap.innerHTML=`<svg viewBox="0 0 40 48" width="23" height="28" aria-hidden="true"><g stroke="#AE9052" stroke-width="1.8" stroke-linejoin="round" fill="${now?'#C9AE73':'none'}"><path d="M20 7 Q8 8 9 21 Q0 29 20 45 Q40 29 31 21 Q32 8 20 7Z"/><path d="M20 7 Q9 16 20 24 Q31 16 20 7Z"/><path d="M9 16 Q7 28 20 34 Q21 22 9 16Z"/><path d="M31 16 Q33 28 20 34 Q19 22 31 16Z"/><path d="M9 28 Q9 38 20 45 Q23 36 9 28Z"/><path d="M31 28 Q31 38 20 45 Q17 36 31 28Z"/><path d="M20 7 Q18 3 23 1" fill="none"/></g></svg>`;}else if(now){const star=el('span','☆',right);star.className='due-star';star.title='Trinkfenster erreicht';}}
 function countExemplars(rows){return rows.reduce((sum,b)=>{const n=Number(b.qty??1);return sum+(Number.isFinite(n)&&n>=0?n:0);},0);}
 function render(){
- for(const button of $('nav').querySelectorAll('button')){const tab=button.dataset.cat;button.textContent=`${tab} (${countExemplars(rowsFor(tab))})`;button.setAttribute('aria-pressed',String(tab===view));}
+ for(const button of $('nav').querySelectorAll('button[data-cat]')){const tab=button.dataset.cat;button.textContent=`${tab} (${countExemplars(rowsFor(tab).filter(b=>tab!=='Bestand'||b.place!=='Bestellt'))})`;button.setAttribute('aria-pressed',String(tab===view));}
  const archive=view==='Archiv';$('filterPlace').disabled=archive||view==='Bestellt'||['1','2','3'].includes(view);
  const options=[...new Set((archive?state.archive:state.stock).flatMap(hopKeys))].sort(compareText);
  const sel=$('filterHop'),previous=sel.value;sel.replaceChildren();const all=el('option','Alle',sel);all.value='';for(const k of options){const o=el('option',displayHop(k),sel);o.value=k;}sel.value=options.includes(previous)?previous:'';
+ const source=archive?state.archive:state.stock;
+ fillSelect('filterBrew',[...new Set(source.map(b=>b.brewery).filter(Boolean))].sort(compareText),v=>v);
+ fillSelect('filterMonth',[...new Set(source.filter(b=>b.place!=='Bestellt').map(monthKey).filter(Boolean))].sort(),v=>monthLabel(v+'-01'));
+ $('filterMonth').disabled=archive;
  let rows=rowsFor(view);
- const q=$('search').value.toLowerCase(),hop=sel.value,place=$('filterPlace').value,sort=$('sortBy').value;
- rows=rows.filter(b=>[b.name,b.brewery,b.style,b.hops].join(' ').toLowerCase().includes(q)&&(!hop||hopKeys(b).includes(hop))&&(archive||!place||b.place===place));
- const stats=new Map(inferHopProfile(state).map(x=>[x.name,x])); rows.sort((a,b)=>{let c=0;if(sort==='default'){const group=x=>({'SL1':1,'SL2':2,'SL3':3}[x.sl]||4);if(!archive&&view!=='Bestellt'){c=group(a)-group(b);if(c)return c;if(a.sl==='SL1')return (Number(a.rank)||999)-(Number(b.rank)||999)||(affinity(b,stats)??-2)-(affinity(a,stats)??-2)||compareText(a.name,b.name);if(a.sl==='SL2')return compareText(a.name,b.name)||compareText(a.brewery,b.brewery);}return compareText((archive?a.archived:sortDate(a))||'9999',(archive?b.archived:sortDate(b))||'9999')||compareText(a.name,b.name);}if(sort==='date')c=compareText((archive?a.archived:sortDate(a))||'9999-99-99',(archive?b.archived:sortDate(b))||'9999-99-99');else if(sort==='hop')c=compareText(hopKeys(a).join(', ')||'\uffff',hopKeys(b).join(', ')||'\uffff');else if(sort==='place')c=placeOrder(a)-placeOrder(b);else if(sort==='brewery')c=compareText(a.brewery,b.brewery);return c||compareText(a.name,b.name);});
- $('summary').textContent=`${view}: ${new Set(rows.map(keyOf)).size} Sorten · ${countExemplars(rows)} ${archive?'Archiveinträge':'Exemplare'}`;
+ const q=$('search').value.toLowerCase(),hop=sel.value,place=$('filterPlace').value,sort=$('sortBy').value,brew=$('filterBrew').value,month=$('filterMonth').value;
+ rows=rows.filter(b=>[b.name,b.brewery,b.style,b.hops].join(' ').toLowerCase().includes(q)&&(!hop||hopKeys(b).includes(hop))&&(archive||!place||b.place===place)&&(!brew||b.brewery===brew)&&(archive||!month||b.place!=='Bestellt'&&monthKey(b)===month));
+ filterToggle.textContent='Filter'+([q,hop,place,brew,month].filter(Boolean).length?` (${[q,hop,place,brew,month].filter(Boolean).length})`:'');
+ const stats=new Map(inferHopProfile(state).map(x=>[x.name,x]));
+ const alphabetical=(a,b)=>compareText(a.brewery,b.brewery)||compareText(a.name,b.name);
+ rows.sort((a,b)=>{let c=0;if(!archive){c=Number(a.place==='Bestellt')-Number(b.place==='Bestellt');if(c)return c;}if(sort==='default'||sort==='date'){c=compareText((archive?text(a.archived).slice(0,7):monthKey(a))||'9999',(archive?text(b.archived).slice(0,7):monthKey(b))||'9999');if(c)return c;if(view==='SL1'&&sort==='default')return (Number(a.rank)||999)-(Number(b.rank)||999)||(affinity(b,stats)??-2)-(affinity(a,stats)??-2)||alphabetical(a,b);return alphabetical(a,b);}if(sort==='hop')c=compareText(hopKeys(a).join(', ')||'\uffff',hopKeys(b).join(', ')||'\uffff');else if(sort==='place')c=placeOrder(a)-placeOrder(b);else if(sort==='brewery')return alphabetical(a,b);return c||compareText(a.name,b.name);});
+ const available=rows.filter(b=>b.place!=='Bestellt'),ordered=rows.filter(b=>b.place==='Bestellt');
+ $('summary').textContent=`${view}: ${new Set((archive?rows:available).map(keyOf)).size} Sorten · ${countExemplars(archive?rows:available)} ${archive?'Archiveinträge':'verfügbar'}${ordered.length?' · '+countExemplars(ordered)+' bestellt':''}`;
  const p=$('list');p.replaceChildren();if(!rows.length){el('p','Keine passenden Biere.',p);return;}
- for(const b of rows){const a=el('article','',p);a.dataset.cat=archive?'Archiv':b.place==='Bestellt'?'Bestellt':b.sl||'Sonstige';const toggle=btn('',a,()=>{detail.hidden=!detail.hidden;toggle.setAttribute('aria-expanded',String(!detail.hidden));});toggle.className='beer-toggle';toggle.setAttribute('aria-expanded','false');
- const head=el('span','',toggle);head.className='beer-head';const title=el('strong',b.name,head);title.style.fontSize='17px';
- const meta=el('span',`${b.brewery} · ${b.style} · ${b.abv==null?'?':b.abv} %`,toggle);meta.className='beer-meta';meta.style.display='block';
+ const grouped=!archive&&['default','date'].includes(sort);let lastGroup=null;
+ for(const b of rows){const group=b.place==='Bestellt'?'Bestellt':monthKey(b)||'Ohne Trinkfenster';if(grouped&&group!==lastGroup){const heading=el('h2',/^\d{4}-\d{2}$/.test(group)?monthLabel(group+'-01'):group,p);heading.className='month-heading';lastGroup=group;}const a=el('article','',p);a.dataset.cat=archive?'Archiv':b.place==='Bestellt'?'Bestellt':b.sl||'Sonstige';const toggle=btn('',a,()=>{detail.hidden=!detail.hidden;toggle.setAttribute('aria-expanded',String(!detail.hidden));});toggle.className='beer-toggle';toggle.setAttribute('aria-expanded','false');
+ const head=el('span','',toggle);head.className='beer-head';const brewery=el('strong',b.brewery,head);brewery.className='brewery';const title=el('span',' – '+b.name,head);title.className='beer-name';
+ const meta=el('span',`${b.style} · ${b.abv==null?'?':b.abv} %`,toggle);meta.className='beer-meta';meta.style.display='block';
  const hops=el('span',text(b.hops).split(/[,;\n]+/).map(h=>displayHop(h.trim())).join(' · '),toggle);hops.className='beer-hops';hops.style.display='block';
- const loc=el('span',archive?[b.mark,b.archived].filter(Boolean).join(' · '):[b.place==='Bestellt'?'Bestellt':b.place==='Ungeklärt'?'Ort offen':'',sortDate(b)?'Trinken: '+monthLabel(sortDate(b)):''].filter(Boolean).join(' · '),toggle);loc.className='beer-date';loc.style.display='block';
- const right=el('div','',a);right.className='beer-right';const qty=el('div',`${b.qty||1}×`,right);qty.className='beer-qty';if(!archive&&b.place!=='Bestellt'){if(sortDate(b)&&sortDate(b).slice(0,7)<=today().slice(0,7)){const star=el('span','★',right);star.className='due-star';star.title='Trinkfenster erreicht';}if(placeOrder(b)<=3){const badge=el('span',String(placeOrder(b)),right);badge.className='storage storage-'+placeOrder(b);badge.title=b.place;}}if(!archive&&b.place!=='Bestellt'&&b.sl){const tag=el('span',b.sl,right);tag.className='sl-tag sl-'+b.sl;}
- const detail=el('div','',a);detail.className='beer-detail-wrap';detail.hidden=true;if(!archive){el('div',freshness(b),detail);if(b.ordered)el('div','Bestellt: '+b.ordered,detail);if(b.mhd)el('div','MHD: '+b.mhd,detail);}
+ const loc=el('span',archive?[b.mark,b.archived].filter(Boolean).join(' · '):[b.place==='Bestellt'?'Bestellt':b.place==='Ungeklärt'?'Ort offen':'',!grouped&&b.place!=='Bestellt'&&sortDate(b)?monthLabel(sortDate(b)):''].filter(Boolean).join(' · '),toggle);loc.className='beer-date';loc.style.display='block';
+ const right=el('div','',a);right.className='beer-right';if(!archive&&b.place!=='Bestellt')reminder(b,right);const qty=el('span',`${b.qty??1}×`,right);qty.className='storage '+(archive?'storage-neutral':b.place==='Bestellt'?'storage-ordered':placeOrder(b)<=3?'storage-'+placeOrder(b):'storage-neutral');qty.title=archive?'Archiv':b.place||'Ort offen';qty.setAttribute('aria-label',`${b.qty??1} Exemplare · ${qty.title}`);
+ const detail=el('div','',a);detail.className='beer-detail-wrap';detail.hidden=true;if(!archive){el('div','Lagerort: '+(b.place||'Ungeklärt'),detail);el('div',freshness(b),detail);if(b.ordered)el('div','Bestellt: '+b.ordered,detail);if(b.mhd)el('div','MHD: '+b.mhd,detail);}
  btn('Bearbeiten',detail,()=>edit(b,archive));if(!archive){const move=el('select','',detail);const empty=el('option',b.place==='Bestellt'?'Einlagern …':'Umlagern …',move);empty.value='';for(const p of places.slice(1,4)){if(p===b.place)continue;const o=el('option',p,move);o.value=p;}move.onchange=()=>action(async()=>{if(!move.value)return;const n=structuredClone(state),x=n.stock.find(x=>x.id===b.id);if(!x)throw Error('Eintrag fehlt');x.place=move.value;x.legacyPlace=String(placeOrder(x));await save(n);});}if(!archive&&b.place!=='Bestellt')btn('1 ausbuchen',detail,()=>action(async()=>{if(!confirm('Ein Exemplar ausbuchen und archivieren?'))return;const n=structuredClone(state),x=n.stock.find(x=>x.id===b.id);n.archive.push({...x,id:id(),qty:1,archived:today()});if(--x.qty===0)n.stock=n.stock.filter(y=>y.id!==b.id);if(x.sl==='SL2'&&!n.stock.some(y=>keyOf(y)===keyOf(x)&&y.qty>=2&&y.place!=='Bestellt'))for(const y of n.stock.filter(y=>keyOf(y)===keyOf(x)))y.sl='';await save(n)}));
  }
 }
@@ -105,7 +123,7 @@ function parseBeerScreenshot(raw){
 }
 const smart=el('section','',$('main'));smart.hidden=true;
 $('main').insertBefore(smart,$('search'));
-const smartButton=btn('Smart Import 📸',$('add').parentElement,()=>{smart.hidden=!smart.hidden;if(!smart.hidden)smart.scrollIntoView({block:'nearest'});});
+const smartButton=btn('Smart Import 📸',$('tools'),()=>{smart.hidden=!smart.hidden;if(!smart.hidden)smart.scrollIntoView({block:'nearest'});});
 el('h2','Screenshot importieren',smart);
 el('p','Bild wählen, erkannte Daten prüfen und erst dann speichern. Neue Bestellungen werden als Bestellt erfasst.',smart);
 const shot=document.createElement('input');shot.type='file';shot.accept='image/*';smart.append(shot);
@@ -139,7 +157,7 @@ function hopCatalog(data){
 }
 const hopPanel=el('section','',$('main'));hopPanel.hidden=true;
 $('main').insertBefore(hopPanel,$('search'));
-btn('Hop Library',$('add').parentElement,()=>{hopPanel.hidden=!hopPanel.hidden;if(!hopPanel.hidden){smart.hidden=true;drawHops();hopPanel.scrollIntoView({block:'nearest'});}});
+btn('Hop Library',$('tools'),()=>{hopPanel.hidden=!hopPanel.hidden;if(!hopPanel.hidden){smart.hidden=true;drawHops();hopPanel.scrollIntoView({block:'nearest'});}});
 el('h2','Mein Hopfenprofil',hopPanel);
 
 const hopSearch=document.createElement('input');hopSearch.placeholder='Hopfen suchen';hopPanel.append(hopSearch);
@@ -186,7 +204,7 @@ el('h2','Auswahl & Lagerung',ready);
 
 const situation=document.createElement('select');for(const [v,t] of [['SL1','SL1'],['SL2','SL2'],['SL3','SL3']]){const o=el('option',t,situation);o.value=v;}ready.append(situation);
 const readyRows=el('div','',ready);
-btn('Auswahl & Lagerung',$('add').parentElement,()=>{ready.hidden=!ready.hidden;if(!ready.hidden){hopPanel.hidden=true;smart.hidden=true;drawReady();ready.scrollIntoView({block:'nearest'});}});
+btn('Auswahl & Lagerung',$('tools'),()=>{ready.hidden=!ready.hidden;if(!ready.hidden){hopPanel.hidden=true;smart.hidden=true;drawReady();ready.scrollIntoView({block:'nearest'});}});
 function affinity(b,stats){const keys=[...new Set(text(b.hops).split(/[,;\n]+/).map(hopEvidenceKey).filter(Boolean))];let sum=0,n=0;for(const k of keys){const manual=Object.values(state.hopProfile||{}).find(h=>h&&hopEvidenceKey(h.name)===k&&Number.isInteger(h.rating));const s=stats.get(k);if(manual){sum+=(manual.rating-3)/2;n++;}else if(s&&s.n>=3){sum+=Math.max(-1,Math.min(1,(s.rate-s.base)*4));n++;}}return n?sum/n:null;}
 function preferredPlace(b,sl){if(sl==='SL3')return 'Kühlschrank';if(/ipa|pale ale|neipa|dipa|tipa|qipa|oat cream/i.test(b.style)||sl==='SL1')return ['Kühlschrank','Kühlschrank Garage'].includes(b.place)?b.place:'Kühlschrank Garage';return b.place==='Ungeklärt'?'Weinkühlschrank':b.place;}
 function drawReady(){
@@ -213,7 +231,7 @@ situation.onchange=drawReady;
 const renderBase=render;render=function(){renderBase();if(!ready.hidden)drawReady();};
 
 const rulesPanel=el('section','',$('main'));rulesPanel.hidden=true;$('main').insertBefore(rulesPanel,$('search'));
-btn('Trinkfenster-Regeln',$('add').parentElement,()=>{rulesPanel.hidden=!rulesPanel.hidden;if(!rulesPanel.hidden)drawRules();});
+btn('Trinkfenster-Regeln',$('tools'),()=>{rulesPanel.hidden=!rulesPanel.hidden;if(!rulesPanel.hidden)drawRules();});
 function drawRules(){rulesPanel.replaceChildren();el('h2','Trinkfenster · Wochen ab Bestellung',rulesPanel);el('small','Persönliche Richtwerte, keine Haltbarkeitsfristen. Manuelle Daten haben Vorrang.',rulesPanel);const inputs={};for(const k of Object.keys(defaultRules)){const row=el('div','',rulesPanel);row.className='row';el('span',ruleNames[k],row);inputs[k]=[];for(const v of (state.freshnessRules?.[k]||defaultRules[k])){const i=document.createElement('input');i.type='number';i.min=0;i.max=104;i.step=1;i.value=v;i.style.width='75px';i.setAttribute('aria-label',ruleNames[k]+(inputs[k].length?' bis':' ab'));row.append(i);inputs[k].push(i);}}btn('Speichern',rulesPanel,()=>action(async()=>{const n=structuredClone(state);n.freshnessRules={};for(const [k,p] of Object.entries(inputs)){const v=p.map(x=>Number(x.value));if(p.some(x=>!x.value.trim())||!v.every(x=>Number.isInteger(x)&&x>=0&&x<=104)||v[0]>v[1])throw Error('Wochen prüfen');n.freshnessRules[k]=v;}await save(n);rulesPanel.hidden=true;}));btn('Standardwerte',rulesPanel,()=>action(async()=>{const n=structuredClone(state);delete n.freshnessRules;await save(n);drawRules();}));}
 
 if($('url').value&&$('key').value)action(async()=>{db=client();const {data,error}=await db.auth.getSession();if(error)throw error;if(data.session)await loadSession(data.session.user);});
